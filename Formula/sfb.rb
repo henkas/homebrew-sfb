@@ -1,7 +1,7 @@
 class Sfb < Formula
   desc "Smart File Browser for macOS terminal with safe guardrails"
-  homepage "https://github.com/henkipapp/filebrowser"
-  url "https://github.com/henkipapp/filebrowser/archive/refs/tags/v0.1.0.tar.gz"
+  homepage "https://github.com/henkas/sfb"
+  url "https://github.com/henkas/sfb/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "REPLACE_WITH_RELEASE_SHA256"
   license "MIT"
 

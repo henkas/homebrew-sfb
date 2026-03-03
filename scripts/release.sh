@@ -3,7 +3,7 @@
 set -euo pipefail
 
 VERSION="${1:-}"
-REPO="${GITHUB_REPOSITORY:-henkipapp/filebrowser}"
+REPO="${GITHUB_REPOSITORY:-henkas/sfb}"
 
 if [ -z "$VERSION" ]; then
   echo "Usage: $0 <vX.Y.Z>" >&2
