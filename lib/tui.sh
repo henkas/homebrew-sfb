@@ -21,7 +21,7 @@ sfb_tui_run_with_spinner() {
   "$@" >"$log_file" 2>&1 &
   local pid=$!
 
-  local spinner='|/-\\'
+  local spinner="|/-\\"
   local idx=0
 
   while kill -0 "$pid" 2>/dev/null; do
@@ -298,8 +298,7 @@ sfb_tui() {
         local target
         read -r target
         if [ -n "$target" ]; then
-          sfb_trash_paths "tui" 0 "" "$target"
-          if [ "$?" -eq 0 ]; then
+          if sfb_trash_paths "tui" 0 "" "$target"; then
             sfb_tui_set_status "Moved to Trash: $target"
           else
             sfb_tui_set_status "Trash action did not complete: $target"
