@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats shellcheck
+
+      - name: Shell syntax checks
+        run: bash -n bin/sfb lib/*.sh
+
+      - name: Shellcheck
+        run: shellcheck bin/sfb lib/*.sh
+
+      - name: Run Bats tests
+        run: bats tests/sfb.bats

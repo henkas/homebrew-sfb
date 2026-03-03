@@ -1,0 +1,463 @@
+#!/usr/bin/env bash
+
+set -u -o pipefail
+
+SFB_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=../lib/deps.sh
+source "$SFB_ROOT_DIR/lib/deps.sh"
+# shellcheck source=../lib/safety.sh
+source "$SFB_ROOT_DIR/lib/safety.sh"
+# shellcheck source=../lib/scan.sh
+source "$SFB_ROOT_DIR/lib/scan.sh"
+# shellcheck source=../lib/output.sh
+source "$SFB_ROOT_DIR/lib/output.sh"
+# shellcheck source=../lib/tui.sh
+source "$SFB_ROOT_DIR/lib/tui.sh"
+
+sfb_usage() {
+  cat <<USAGE
+sfb - Smart File Browser (macOS)
+
+Usage:
+  sfb                       Start interactive TUI mode
+  sfb tui [path]
+  sfb scan [path] [--depth N] [--top N] [--json|--tsv]
+  sfb list [path] [--top N] [--sort size|name] [--json|--tsv]
+  sfb trash <path...> [--allow-delete --unlock-token TOKEN] [--json]
+  sfb doctor [--install-deps] [--issue-token] [--json]
+  sfb unlock
+  sfb protect list
+  sfb protect add <path>
+  sfb protect remove <path>
+  sfb help
+USAGE
+}
+
+sfb_print_entries_table() {
+  local entries_file="$1"
+  printf '%12s  %-4s  %-6s  %-9s  %s\n' "BYTES" "KIND" "RISK" "PROTECTED" "PATH"
+  awk -F'\t' '{printf "%12s  %-4s  %-6s  %-9s  %s\n", $1, $2, $3, $4, $5}' "$entries_file"
+}
+
+sfb_sort_entries() {
+  local entries_file="$1"
+  local sort_mode="$2"
+
+  case "$sort_mode" in
+    size)
+      sort -nr -k1,1 "$entries_file" -o "$entries_file"
+      ;;
+    name)
+      sort -t$'\t' -k5,5 "$entries_file" -o "$entries_file"
+      ;;
+    *)
+      printf 'Invalid sort mode: %s\n' "$sort_mode" >&2
+      return 2
+      ;;
+  esac
+}
+
+sfb_trash_paths() {
+  local mode="$1"
+  local allow_delete="$2"
+  local unlock_token="$3"
+  shift 3
+
+  local requested_paths=("$@")
+  local blocked_file
+  blocked_file="$(mktemp)"
+
+  local requested_csv=""
+  local trashed_csv=""
+  local runtime_error=0
+
+  local auth_error=""
+  if [ "$mode" = "cli" ]; then
+    if [ "$allow_delete" -ne 1 ]; then
+      auth_error="missing --allow-delete"
+    elif [ -z "$unlock_token" ]; then
+      auth_error="missing --unlock-token"
+    elif ! sfb_validate_unlock_token "$unlock_token"; then
+      auth_error="$SFB_TOKEN_VALIDATION_ERROR"
+    fi
+  fi
+
+  if [ -n "$auth_error" ]; then
+    printf 'Delete authorization failed: %s\n' "$auth_error" >&2
+    rm -f "$blocked_file"
+    return 5
+  fi
+
+  local path canonical
+  for path in "${requested_paths[@]}"; do
+    canonical="$(sfb_abspath "$path" 2>/dev/null || printf '%s' "$path")"
+
+    if [ -z "$requested_csv" ]; then
+      requested_csv="$canonical"
+    else
+      requested_csv="$requested_csv|$canonical"
+    fi
+
+    if [ ! -e "$canonical" ]; then
+      printf '%s\t%s\t%s\n' "$canonical" "path does not exist" "medium" >> "$blocked_file"
+      continue
+    fi
+
+    sfb_classify_path "$canonical"
+    if [ "$SFB_PATH_BLOCKED" -eq 1 ]; then
+      printf '%s\t%s\t%s\n' "$canonical" "$SFB_PATH_REASON" "$SFB_PATH_TIER" >> "$blocked_file"
+      continue
+    fi
+
+    if [ "$mode" = "tui" ]; then
+      if [ "$SFB_PATH_TIER" = "high" ] || [ "$SFB_PATH_TIER" = "medium" ]; then
+        local phrase
+        phrase="TRASH $(basename "$canonical")"
+        printf 'Risk level %s for %s (%s).\n' "$SFB_PATH_TIER" "$canonical" "$SFB_PATH_REASON"
+        if ! sfb_confirm_typed_phrase "$phrase"; then
+          printf '%s\t%s\t%s\n' "$canonical" "confirmation not provided" "$SFB_PATH_TIER" >> "$blocked_file"
+          continue
+        fi
+      else
+        if ! sfb_confirm_yes_no "Move to Trash: $canonical"; then
+          printf '%s\t%s\t%s\n' "$canonical" "confirmation not provided" "$SFB_PATH_TIER" >> "$blocked_file"
+          continue
+        fi
+      fi
+    fi
+
+    if trash "$canonical"; then
+      if [ -z "$trashed_csv" ]; then
+        trashed_csv="$canonical"
+      else
+        trashed_csv="$trashed_csv|$canonical"
+      fi
+      printf 'Moved to Trash: %s\n' "$canonical"
+    else
+      printf 'Failed to move to Trash: %s\n' "$canonical" >&2
+      runtime_error=1
+    fi
+  done
+
+  if [ "$mode" = "cli" ] && [ "${SFB_TRASH_JSON:-0}" -eq 1 ]; then
+    local exit_code=0
+    if [ "$runtime_error" -eq 1 ]; then
+      exit_code=6
+    elif [ -s "$blocked_file" ]; then
+      exit_code=3
+    fi
+    sfb_print_trash_json "$requested_csv" "$trashed_csv" "$blocked_file" false "$exit_code"
+  fi
+
+  if [ -s "$blocked_file" ] && [ "$mode" = "cli" ] && [ "${SFB_TRASH_JSON:-0}" -ne 1 ]; then
+    printf 'Blocked paths:\n' >&2
+    while IFS=$'\t' read -r b_path b_reason b_tier; do
+      printf '  - %s (%s, %s)\n' "$b_path" "$b_tier" "$b_reason" >&2
+    done < "$blocked_file"
+  fi
+
+  rm -f "$blocked_file"
+
+  if [ "$runtime_error" -eq 1 ]; then
+    return 6
+  fi
+
+  if [ "$mode" = "cli" ] && [ -n "$requested_csv" ] && [ -z "$trashed_csv" ]; then
+    return 3
+  fi
+
+  return 0
+}
+
+sfb_cmd_doctor() {
+  local install_deps=0
+  local issue_token=0
+  local json=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --install-deps) install_deps=1 ;;
+      --issue-token) issue_token=1 ;;
+      --json) json=1 ;;
+      *)
+        printf 'Unknown doctor flag: %s\n' "$1" >&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+
+  sfb_collect_dependencies
+
+  if [ "$install_deps" -eq 1 ]; then
+    sfb_install_missing_with_brew
+    sfb_collect_dependencies
+  fi
+
+  local missing_csv installed_csv
+  missing_csv="$(sfb_join_by_comma "${SFB_MISSING_CMDS[@]:-}")"
+  installed_csv="$(sfb_join_by_comma "${SFB_INSTALLED_CMDS[@]:-}")"
+
+  if [ "$json" -eq 1 ]; then
+    sfb_print_doctor_json "$missing_csv" "$installed_csv"
+  else
+    if [ "${#SFB_MISSING_CMDS[@]}" -eq 0 ]; then
+      printf 'All required dependencies are installed.\n'
+    else
+      printf 'Missing required dependencies: %s\n' "$missing_csv"
+      sfb_print_install_help
+    fi
+  fi
+
+  if [ "$issue_token" -eq 1 ]; then
+    local token
+    token="$(sfb_issue_unlock_token)"
+    printf 'Unlock token (valid for %ss): %s\n' "$SFB_TOKEN_TTL_SECONDS" "$token"
+  fi
+
+  if [ "${#SFB_MISSING_CMDS[@]}" -gt 0 ]; then
+    return 4
+  fi
+  return 0
+}
+
+sfb_cmd_unlock() {
+  local token
+  token="$(sfb_issue_unlock_token)"
+  printf '%s\n' "$token"
+}
+
+sfb_cmd_scan() {
+  local root="."
+  local depth=2
+  local top_n=40
+  local format="table"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --depth)
+        shift
+        depth="$1"
+        ;;
+      --top)
+        shift
+        top_n="$1"
+        ;;
+      --json)
+        format="json"
+        ;;
+      --tsv)
+        format="tsv"
+        ;;
+      --*)
+        printf 'Unknown scan flag: %s\n' "$1" >&2
+        return 2
+        ;;
+      *)
+        root="$1"
+        ;;
+    esac
+    shift
+  done
+
+  root="$(sfb_abspath "$root" 2>/dev/null || printf '%s' "$root")"
+  [ -d "$root" ] || {
+    printf 'Not a directory: %s\n' "$root" >&2
+    return 2
+  }
+
+  local entries_file
+  entries_file="$(mktemp)"
+  sfb_scan_directories "$root" "$depth" "$top_n" "$entries_file"
+
+  case "$format" in
+    json) sfb_print_entries_json "$root" "$entries_file" ;;
+    tsv) sfb_print_entries_tsv "$entries_file" ;;
+    table) sfb_print_entries_table "$entries_file" ;;
+  esac
+
+  rm -f "$entries_file"
+}
+
+sfb_cmd_list() {
+  local root="."
+  local top_n=200
+  local sort_mode="size"
+  local format="table"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --top)
+        shift
+        top_n="$1"
+        ;;
+      --sort)
+        shift
+        sort_mode="$1"
+        ;;
+      --json)
+        format="json"
+        ;;
+      --tsv)
+        format="tsv"
+        ;;
+      --*)
+        printf 'Unknown list flag: %s\n' "$1" >&2
+        return 2
+        ;;
+      *)
+        root="$1"
+        ;;
+    esac
+    shift
+  done
+
+  root="$(sfb_abspath "$root" 2>/dev/null || printf '%s' "$root")"
+  [ -d "$root" ] || {
+    printf 'Not a directory: %s\n' "$root" >&2
+    return 2
+  }
+
+  local entries_file
+  entries_file="$(mktemp)"
+  sfb_list_immediate_children "$root" "$top_n" "$entries_file"
+  sfb_sort_entries "$entries_file" "$sort_mode" || {
+    rm -f "$entries_file"
+    return 2
+  }
+
+  case "$format" in
+    json) sfb_print_entries_json "$root" "$entries_file" ;;
+    tsv) sfb_print_entries_tsv "$entries_file" ;;
+    table) sfb_print_entries_table "$entries_file" ;;
+  esac
+
+  rm -f "$entries_file"
+}
+
+sfb_cmd_trash() {
+  local allow_delete=0
+  local unlock_token=""
+  local json=0
+  local paths=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --allow-delete)
+        allow_delete=1
+        ;;
+      --unlock-token)
+        shift
+        unlock_token="$1"
+        ;;
+      --json)
+        json=1
+        ;;
+      --*)
+        printf 'Unknown trash flag: %s\n' "$1" >&2
+        return 2
+        ;;
+      *)
+        paths+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [ "${#paths[@]}" -eq 0 ]; then
+    printf 'No paths specified for trash command.\n' >&2
+    return 2
+  fi
+
+  SFB_TRASH_JSON="$json"
+  sfb_trash_paths "cli" "$allow_delete" "$unlock_token" "${paths[@]}"
+}
+
+sfb_cmd_protect() {
+  local sub="${1:-}"
+  case "$sub" in
+    list)
+      sfb_protect_list
+      ;;
+    add)
+      shift
+      [ "$#" -eq 1 ] || {
+        printf 'Usage: sfb protect add <path>\n' >&2
+        return 2
+      }
+      sfb_protect_add "$1"
+      ;;
+    remove)
+      shift
+      [ "$#" -eq 1 ] || {
+        printf 'Usage: sfb protect remove <path>\n' >&2
+        return 2
+      }
+      sfb_protect_remove "$1"
+      ;;
+    *)
+      printf 'Usage: sfb protect [list|add|remove]\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+main() {
+  local cmd="${1:-tui}"
+
+  case "$cmd" in
+    help|-h|--help)
+      sfb_usage
+      ;;
+    tui)
+      shift || true
+      sfb_require_dependencies || return $?
+      local root="${1:-.}"
+      root="$(sfb_abspath "$root" 2>/dev/null || printf '%s' "$root")"
+      [ -d "$root" ] || {
+        printf 'Not a directory: %s\n' "$root" >&2
+        return 2
+      }
+      sfb_tui "$root"
+      ;;
+    scan)
+      shift
+      sfb_cmd_scan "$@"
+      ;;
+    list)
+      shift
+      sfb_cmd_list "$@"
+      ;;
+    trash)
+      shift
+      sfb_require_dependencies || return $?
+      sfb_cmd_trash "$@"
+      ;;
+    doctor)
+      shift
+      sfb_cmd_doctor "$@"
+      ;;
+    unlock)
+      shift || true
+      sfb_cmd_unlock
+      ;;
+    protect)
+      shift
+      sfb_cmd_protect "$@"
+      ;;
+    *)
+      # Default fallback keeps plain `sfb` as TUI.
+      if [ "$#" -eq 0 ]; then
+        sfb_require_dependencies || return $?
+        sfb_tui "$(pwd -P)"
+      else
+        printf 'Unknown command: %s\n\n' "$cmd" >&2
+        sfb_usage >&2
+        return 2
+      fi
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build source archive
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          git archive --format=tar.gz --output "sfb-${VERSION}.tar.gz" "${VERSION}"
+          shasum -a 256 "sfb-${VERSION}.tar.gz" > "sfb-${VERSION}.sha256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sfb-${{ github.ref_name }}.tar.gz
+            sfb-${{ github.ref_name }}.sha256
+          generate_release_notes: true
+
+  formula-pr:
+    runs-on: ubuntu-latest
+    needs: [release]
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update formula URL and SHA
+        run: |
+          bash scripts/release.sh "${GITHUB_REF_NAME}"
+
+      - name: Create formula update PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore(formula): update for ${{ github.ref_name }}"
+          title: "chore(formula): update for ${{ github.ref_name }}"
+          body: "Automated Homebrew formula update for ${{ github.ref_name }}."
+          branch: "chore/formula-${{ github.ref_name }}"
+          base: "main"
+          labels: |
+            release
+            automation

@@ -1,0 +1,46 @@
+#compdef sfb
+
+_sfb() {
+  local -a commands
+  commands=(
+    'tui:interactive TUI'
+    'scan:scan directories by size'
+    'list:list immediate children'
+    'trash:move paths to Trash'
+    'doctor:check dependencies'
+    'unlock:issue unlock token'
+    'protect:manage path protection'
+    'help:show help'
+  )
+
+  _arguments \
+    '1:command:->cmds' \
+    '*::arg:->args'
+
+  case $state in
+    cmds)
+      _describe -t commands 'sfb commands' commands
+      ;;
+    args)
+      case ${words[2]} in
+        scan)
+          _arguments '--depth[scan depth]:depth:' '--top[top entries]:count:' '--json[json output]' '--tsv[tsv output]'
+          ;;
+        list)
+          _arguments '--top[top entries]:count:' '--sort[sort mode]:mode:(size name)' '--json[json output]' '--tsv[tsv output]'
+          ;;
+        trash)
+          _arguments '--allow-delete[enable deletion]' '--unlock-token[unlock token]:token:' '--json[json output]'
+          ;;
+        doctor)
+          _arguments '--install-deps[install missing dependencies]' '--issue-token[issue unlock token]' '--json[json output]'
+          ;;
+        protect)
+          _values 'subcommand' list add remove
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_sfb "$@"
