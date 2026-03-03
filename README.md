@@ -15,6 +15,13 @@
   - `--unlock-token <token>` from `sfb unlock`
 - Trash-only delete behavior (`trash` command, never `rm`)
 
+## Install (Homebrew)
+
+```bash
+brew tap henkas/tap
+brew install henkas/tap/sfb
+```
+
 ## Install (local)
 
 ```bash
