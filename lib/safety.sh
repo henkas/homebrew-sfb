@@ -410,7 +410,6 @@ TOKEN
   printf '%s\n' "$token"
 }
 
-# shellcheck disable=SC2034
 sfb_validate_unlock_token() {
   local token="$1"
   SFB_TOKEN_VALIDATION_ERROR=""
