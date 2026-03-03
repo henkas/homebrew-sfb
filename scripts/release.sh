@@ -60,10 +60,11 @@ fi
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-ARCHIVE="sfb-${VERSION}.tar.gz"
-git archive --format=tar.gz --output "$WORKDIR/$ARCHIVE" "$VERSION"
-SHA256="$(shasum -a 256 "$WORKDIR/$ARCHIVE" | awk '{print $1}')"
 SOURCE_URL="https://github.com/${SOURCE_REPO}/archive/refs/tags/${VERSION}.tar.gz"
+ARCHIVE="$WORKDIR/sfb-${VERSION}.tar.gz"
+
+curl --fail --location --silent --show-error "$SOURCE_URL" --output "$ARCHIVE"
+SHA256="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
 
 mkdir -p "$(dirname "$FORMULA_PATH")"
 cat > "$FORMULA_PATH" <<FORMULA

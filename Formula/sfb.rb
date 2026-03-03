@@ -2,7 +2,7 @@ class Sfb < Formula
   desc "Smart File Browser for macOS terminal with safe guardrails"
   homepage "https://github.com/henkas/homebrew-sfb"
   url "https://github.com/henkas/homebrew-sfb/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "981b13483c844cae2d8d1e440a18b6d6d4ba69e2c7f432078ca1d2b03d210bee"
+  sha256 "8e6433a07e50d3e3570248e7e1567287177cadd18b547a7b855cdef74a6a758b"
   license "MIT"
 
   depends_on "fzf"
